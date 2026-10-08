@@ -1,7 +1,6 @@
 """命令行交互模块"""
 
 import os
-import sys
 from typing import Optional
 
 from pdf_parser import PDFParser
@@ -13,7 +12,7 @@ from rag_engine import RAGEngine
 class CLI:
     """命令行交互界面"""
     
-    def __init__(self, parser: PDFParser, vector_store: VectorStore,
+    def __init__(self, parser: PDFParser, vector_store: VectorStore, 
                  memory_store: MemoryStore, rag_engine: RAGEngine,
                  paper_cache_path: str = "../target"):
         """初始化 CLI
@@ -62,6 +61,7 @@ class CLI:
         print("  load <pdf_path>      加载 PDF 论文（支持文件名或路径）")
         print("  list-cache           列出缓存目录中的论文")
         print("  ask <question>       针对当前论文提问")
+        print("  ask-all <question>   跨论文提问（检索所有已读论文）")
         print("  list                 列出所有已读论文")
         print("  history [paper_id]   查看对话历史")
         print("  search <query>       跨论文语义搜索")
@@ -105,7 +105,7 @@ class CLI:
         
         if action == "quit" or action == "exit":
             print("再见！")
-            sys.exit(0)
+            return
         
         elif action == "help":
             self._print_welcome()
@@ -118,6 +118,9 @@ class CLI:
         
         elif action == "ask":
             self._handle_ask(arg)
+        
+        elif action == "ask-all":
+            self._handle_ask_all(arg)
         
         elif action == "list":
             self._handle_list()
@@ -209,7 +212,7 @@ class CLI:
             print(f"  {i}. {filename} ({size_mb:.1f} MB)")
     
     def _handle_ask(self, question: str):
-        """处理 ask 命令"""
+        """处理 ask 命令（单论文问答）"""
         if not question:
             print("用法：ask <question>")
             return
@@ -238,6 +241,37 @@ class CLI:
             # 输出答案
             print(f"\n回答：{result['answer']}")
             print(f"（基于 {len(result['contexts'])} 个相关段落）")
+        
+        except Exception as e:
+            print(f"提问失败：{e}")
+    
+    def _handle_ask_all(self, question: str):
+        """处理 ask-all 命令（跨论文问答）"""
+        if not question:
+            print("用法：ask-all <question>")
+            return
+        
+        # 获取所有已读论文
+        papers = self.memory_store.list_papers()
+        if not papers:
+            print("还没有读过任何论文")
+            return
+        
+        paper_ids = [p["id"] for p in papers]
+        
+        try:
+            print(f"正在从 {len(papers)} 篇论文中检索...")
+            
+            # 执行跨论文 RAG 查询
+            result = self.rag_engine.query_cross_paper(
+                question=question,
+                paper_ids=paper_ids,
+                top_k_per_paper=3
+            )
+            
+            # 输出答案
+            print(f"\n回答：{result['answer']}")
+            print(f"（基于 {len(result['contexts'])} 个相关段落，来自 {len(set(m['paper_id'] for m in result['metadata']))} 篇论文）")
         
         except Exception as e:
             print(f"提问失败：{e}")

@@ -212,8 +212,23 @@ def main():
         return
     
     current_paper = memory_store.get_paper(st.session_state.current_paper_id)
-    st.caption(f"当前论文：{current_paper['filename']}")
     
+    # 问答模式选择
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        query_mode = st.radio(
+            "问答模式",
+            ["单论文", "跨论文"],
+            horizontal=True,
+            help="单论文：仅检索当前论文；跨论文：检索所有已读论文"
+        )
+    with col2:
+        if query_mode == "单论文":
+            st.caption(f"当前论文：{current_paper['filename']}")
+        else:
+            st.caption(f"跨论文模式：检索所有 {len(papers)} 篇已读论文")
+    
+    # 初始化对话历史
     if "messages" not in st.session_state:
         st.session_state.messages = []
     
@@ -231,23 +246,42 @@ def main():
         with st.chat_message("assistant"):
             with st.spinner("正在思考..."):
                 try:
-                    result = rag_engine.query(
-                        question=prompt,
-                        paper_id=st.session_state.current_paper_id
-                    )
+                    if query_mode == "单论文":
+                        # 单论文问答
+                        result = rag_engine.query(
+                            question=prompt,
+                            paper_id=st.session_state.current_paper_id
+                        )
+                        
+                        answer = result["answer"]
+                        context_count = len(result["contexts"])
+                        source_info = f"基于 {context_count} 个相关段落"
+                        
+                        # 保存对话记录
+                        memory_store.add_conversation(
+                            paper_id=st.session_state.current_paper_id,
+                            question=prompt,
+                            answer=answer,
+                            contexts=result["contexts"]
+                        )
                     
-                    answer = result["answer"]
-                    context_count = len(result["contexts"])
+                    else:
+                        # 跨论文问答
+                        paper_ids = [p["id"] for p in papers]
+                        result = rag_engine.query_cross_paper(
+                            question=prompt,
+                            paper_ids=paper_ids,
+                            top_k_per_paper=3
+                        )
+                        
+                        answer = result["answer"]
+                        context_count = len(result["contexts"])
+                        paper_count = len(set(m["paper_id"] for m in result["metadata"]))
+                        source_info = f"基于 {context_count} 个相关段落，来自 {paper_count} 篇论文"
                     
+                    # 显示回答
                     st.markdown(answer)
-                    st.caption(f"基于 {context_count} 个相关段落")
-                    
-                    memory_store.add_conversation(
-                        paper_id=st.session_state.current_paper_id,
-                        question=prompt,
-                        answer=answer,
-                        contexts=result["contexts"]
-                    )
+                    st.caption(source_info)
                     
                     st.session_state.messages.append({"role": "assistant", "content": answer})
                 

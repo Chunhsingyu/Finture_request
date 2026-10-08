@@ -22,7 +22,7 @@ class RAGEngine:
         self.top_k = top_k
     
     def query(self, question: str, paper_id: Optional[int] = None) -> Dict:
-        """执行 RAG 查询
+        """执行 RAG 查询（单论文）
         
         Args:
             question: 用户问题
@@ -67,6 +67,70 @@ class RAGEngine:
             "answer": answer,
             "contexts": contexts,
             "metadata": metadata
+        }
+    
+    def query_cross_paper(self, question: str, paper_ids: Optional[List[int]] = None, top_k_per_paper: int = 3) -> Dict:
+        """执行跨论文 RAG 查询
+        
+        Args:
+            question: 用户问题
+            paper_ids: 限定的论文 ID 列表（可选，为 None 时检索所有论文）
+            top_k_per_paper: 每篇论文检索的段落数量
+        
+        Returns:
+            {
+                "answer": "生成的答案",
+                "contexts": ["段落1", "段落2", ...],
+                "metadata": [{"paper_id": 1, "chunk_idx": 0, "score": 0.85}, ...]
+            }
+        """
+        all_contexts = []
+        all_metadata = []
+        
+        if paper_ids:
+            # 从指定论文中检索
+            for paper_id in paper_ids:
+                results = self.vector_store.search(
+                    query=question,
+                    paper_id=paper_id,
+                    top_k=top_k_per_paper
+                )
+                for r in results:
+                    all_contexts.append(r["text"])
+                    all_metadata.append({
+                        "paper_id": r["paper_id"],
+                        "chunk_idx": r["chunk_idx"],
+                        "score": r["score"]
+                    })
+        else:
+            # 全局检索
+            results = self.vector_store.search(
+                query=question,
+                paper_id=None,
+                top_k=top_k_per_paper * 3  # 检索更多段落
+            )
+            for r in results:
+                all_contexts.append(r["text"])
+                all_metadata.append({
+                    "paper_id": r["paper_id"],
+                    "chunk_idx": r["chunk_idx"],
+                    "score": r["score"]
+                })
+        
+        if not all_contexts:
+            return {
+                "answer": "未找到相关的论文段落，无法回答该问题。",
+                "contexts": [],
+                "metadata": []
+            }
+        
+        # 生成答案
+        answer = self.llm_client.generate_cross_paper_answer(question, all_contexts, all_metadata)
+        
+        return {
+            "answer": answer,
+            "contexts": all_contexts,
+            "metadata": all_metadata
         }
     
     def search(self, query: str, paper_id: Optional[int] = None, top_k: int = 5) -> List[Dict]:
