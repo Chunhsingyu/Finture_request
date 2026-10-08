@@ -89,7 +89,7 @@ def get_vector_data(vector_store, memory_store):
     # 获取所有向量数据
     all_data = vector_store.collection.get(include=['embeddings', 'metadatas', 'documents'])
     
-    if not all_data['embeddings']:
+    if all_data['embeddings'] is None or len(all_data['embeddings']) == 0:
         return None
     
     embeddings = np.array(all_data['embeddings'])
