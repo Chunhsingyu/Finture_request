@@ -1,6 +1,7 @@
 """LLM 客户端模块"""
 
 import os
+import re
 from typing import List, Dict
 from anthropic import Anthropic
 
@@ -39,6 +40,25 @@ class LLMClient:
         block_types = [type(b).__name__ for b in response.content]
         return f"[调试] 未找到文本块，响应类型: {block_types}"
     
+    def _fix_latex_format(self, text: str) -> str:
+        """修复 LaTeX 格式问题"""
+        # 修复常见的格式错误
+        # 1. 修复错误的下标格式：\dot{M}*{\rm BH} -> \dot{M}_{\rm BH}
+        text = re.sub(r'\\(\w+)\*\{(\\?\w+)\}', r'\\$1_{$2}', text)
+        
+        # 2. 修复反斜杠转义：\_{\rm BH} -> _{\rm BH}
+        text = re.sub(r'\\_\{([^}]+)\}', r'_{\1}', text)
+        
+        # 3. 确保行内公式用 $ 包裹
+        # 查找 \( ... \) 格式并转换为 $ ... $
+        text = re.sub(r'\\\((.+?)\\\)', r'$\1$', text)
+        
+        # 4. 确保块级公式用 $$ 包裹
+        # 查找 \[ ... \] 格式并转换为 $$ ... $$
+        text = re.sub(r'\\\[(.+?)\\\]', r'$$\1$$', text, flags=re.DOTALL)
+        
+        return text
+    
     def generate_answer(self, question: str, contexts: List[str]) -> str:
         """基于上下文生成答案（单论文）
         
@@ -57,7 +77,13 @@ class LLMClient:
 
 用户问题：{question}
 
-请用中文回答，如果段落中没有相关信息，请说明。"""
+请用中文回答。如果涉及数学公式，请使用标准 LaTeX 格式：
+- 行内公式用 $...$ 包裹，例如：$E = mc^2$
+- 块级公式用 $$...$$ 包裹，例如：$$\dot{{M}}_{{\rm BH}} = \dot{{M}}_{{\rm BH,inf}} - \dot{{M}}_{{\rm BH,wind}}$$
+- 下标用 _{{}}，上标用 ^{{}}
+- 避免使用 \( \) 或 \[ \] 格式
+
+如果段落中没有相关信息，请说明。"""
         
         try:
             response = self.client.messages.create(
@@ -69,7 +95,8 @@ class LLMClient:
                 }]
             )
             
-            return self._extract_text(response)
+            answer = self._extract_text(response)
+            return self._fix_latex_format(answer)
             
         except Exception as e:
             return f"API 调用失败：{str(e)}"
@@ -114,7 +141,13 @@ class LLMClient:
 
 用户问题：{question}
 
-请用中文回答，如果段落中没有相关信息，请说明。"""
+请用中文回答。如果涉及数学公式，请使用标准 LaTeX 格式：
+- 行内公式用 $...$ 包裹，例如：$E = mc^2$
+- 块级公式用 $$...$$ 包裹
+- 下标用 _{{}}，上标用 ^{{}}
+- 避免使用 \( \) 或 \[ \] 格式
+
+如果段落中没有相关信息，请说明。"""
         
         try:
             response = self.client.messages.create(
@@ -126,7 +159,8 @@ class LLMClient:
                 }]
             )
             
-            return self._extract_text(response)
+            answer = self._extract_text(response)
+            return self._fix_latex_format(answer)
             
         except Exception as e:
             return f"API 调用失败：{str(e)}"
