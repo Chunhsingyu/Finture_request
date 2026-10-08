@@ -6,6 +6,10 @@ import tempfile
 from pathlib import Path
 
 import streamlit as st
+import pandas as pd
+import plotly.express as px
+from sklearn.manifold import TSNE
+import numpy as np
 
 # 确保可以导入同目录模块
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -80,6 +84,109 @@ def load_conversations_for_paper(memory_store, paper_id):
     st.session_state.current_paper_id = paper_id
 
 
+def get_vector_data(vector_store, memory_store):
+    """获取向量库数据用于可视化"""
+    # 获取所有向量数据
+    all_data = vector_store.collection.get(include=['embeddings', 'metadatas', 'documents'])
+    
+    if not all_data['embeddings']:
+        return None
+    
+    embeddings = np.array(all_data['embeddings'])
+    metadatas = all_data['metadatas']
+    documents = all_data['documents']
+    
+    # 获取论文名称映射
+    papers = memory_store.list_papers(limit=1000)
+    paper_map = {p['id']: p['filename'] for p in papers}
+    
+    # 构建数据框
+    data = []
+    for i, (emb, meta, doc) in enumerate(zip(embeddings, metadatas, documents)):
+        paper_id = meta.get('paper_id', 'unknown')
+        paper_name = paper_map.get(paper_id, f'论文{paper_id}')
+        chunk_idx = meta.get('chunk_idx', i)
+        
+        data.append({
+            'paper_id': paper_id,
+            'paper_name': paper_name,
+            'chunk_idx': chunk_idx,
+            'text_preview': doc[:100] + '...' if len(doc) > 100 else doc,
+            'embedding': emb
+        })
+    
+    return pd.DataFrame(data)
+
+
+def visualize_vectors(df):
+    """使用 t-SNE 可视化向量"""
+    if df is None or len(df) == 0:
+        st.warning("没有向量数据可可视化")
+        return
+    
+    st.subheader("向量空间可视化（t-SNE）")
+    st.caption("将高维向量降维到 2D 空间，展示论文段落的语义分布")
+    
+    # 提取嵌入向量
+    embeddings = np.array(df['embedding'].tolist())
+    
+    # t-SNE 降维
+    with st.spinner("正在计算 t-SNE..."):
+        tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(embeddings)-1))
+        embeddings_2d = tsne.fit_transform(embeddings)
+    
+    # 添加到数据框
+    df['x'] = embeddings_2d[:, 0]
+    df['y'] = embeddings_2d[:, 1]
+    
+    # 创建散点图
+    fig = px.scatter(
+        df,
+        x='x',
+        y='y',
+        color='paper_name',
+        hover_data=['chunk_idx', 'text_preview'],
+        title='论文段落向量分布',
+        labels={'x': 't-SNE 维度 1', 'y': 't-SNE 维度 2'}
+    )
+    
+    fig.update_traces(marker=dict(size=8, opacity=0.7))
+    fig.update_layout(height=600)
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # 统计信息
+    st.subheader("向量统计")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("总段落数", len(df))
+    with col2:
+        st.metric("论文数量", df['paper_id'].nunique())
+    with col3:
+        st.metric("向量维度", len(df['embedding'].iloc[0]))
+    
+    # 每篇论文的段落数
+    st.subheader("各论文段落分布")
+    paper_stats = df.groupby('paper_name').size().reset_index(name='段落数')
+    paper_stats = paper_stats.sort_values('段落数', ascending=False)
+    
+    fig2 = px.bar(
+        paper_stats,
+        x='paper_name',
+        y='段落数',
+        title='各论文段落数量',
+        labels={'paper_name': '论文', '段落数': '段落数量'}
+    )
+    fig2.update_layout(height=400)
+    st.plotly_chart(fig2, use_container_width=True)
+    
+    # 数据表格
+    st.subheader("向量数据详情")
+    display_df = df[['paper_name', 'chunk_idx', 'text_preview']].copy()
+    display_df.columns = ['论文', '段落索引', '文本预览']
+    st.dataframe(display_df, use_container_width=True, height=400)
+
+
 def main():
     st.set_page_config(
         page_title="论文阅读助手",
@@ -87,12 +194,32 @@ def main():
         layout="wide"
     )
     
+    # 初始化视图状态
+    if "current_view" not in st.session_state:
+        st.session_state.current_view = "qa"
+    
     # 初始化模块
     parser, vector_store, memory_store, rag_engine, config = init_modules()
     
     # 侧边栏：论文管理
     with st.sidebar:
         st.title("📚 论文管理")
+        
+        # 视图切换
+        st.subheader("功能导航")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("💬 问答", use_container_width=True, 
+                        type="primary" if st.session_state.current_view == "qa" else "secondary"):
+                st.session_state.current_view = "qa"
+                st.rerun()
+        with col2:
+            if st.button("📊 可视化", use_container_width=True,
+                        type="primary" if st.session_state.current_view == "viz" else "secondary"):
+                st.session_state.current_view = "viz"
+                st.rerun()
+        
+        st.divider()
         
         # 从缓存目录加载
         st.subheader("缓存目录")
@@ -204,91 +331,106 @@ def main():
         st.metric("论文数量", len(papers))
         st.metric("向量段落", vector_stats["total_chunks"])
     
-    # 主界面：问答
-    st.title("💬 论文问答")
-    
-    if "current_paper_id" not in st.session_state or not papers:
-        st.warning("请先从缓存目录加载或上传一篇论文")
-        return
-    
-    current_paper = memory_store.get_paper(st.session_state.current_paper_id)
-    
-    # 问答模式选择
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        query_mode = st.radio(
-            "问答模式",
-            ["单论文", "跨论文"],
-            horizontal=True,
-            help="单论文：仅检索当前论文；跨论文：检索所有已读论文"
-        )
-    with col2:
-        if query_mode == "单论文":
-            st.caption(f"当前论文：{current_paper['filename']}")
-        else:
-            st.caption(f"跨论文模式：检索所有 {len(papers)} 篇已读论文")
-    
-    # 初始化对话历史
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    
-    # 显示对话历史
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-    
-    # 用户输入
-    if prompt := st.chat_input("输入你的问题..."):
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        st.session_state.messages.append({"role": "user", "content": prompt})
+    # 主界面：根据视图显示不同内容
+    if st.session_state.current_view == "qa":
+        # 问答视图
+        st.title("💬 论文问答")
         
-        with st.chat_message("assistant"):
-            with st.spinner("正在思考..."):
-                try:
-                    if query_mode == "单论文":
-                        # 单论文问答
-                        result = rag_engine.query(
-                            question=prompt,
-                            paper_id=st.session_state.current_paper_id
-                        )
+        if "current_paper_id" not in st.session_state or not papers:
+            st.warning("请先从缓存目录加载或上传一篇论文")
+            return
+        
+        current_paper = memory_store.get_paper(st.session_state.current_paper_id)
+        
+        # 问答模式选择
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            query_mode = st.radio(
+                "问答模式",
+                ["单论文", "跨论文"],
+                horizontal=True,
+                help="单论文：仅检索当前论文；跨论文：检索所有已读论文"
+            )
+        with col2:
+            if query_mode == "单论文":
+                st.caption(f"当前论文：{current_paper['filename']}")
+            else:
+                st.caption(f"跨论文模式：检索所有 {len(papers)} 篇已读论文")
+        
+        # 初始化对话历史
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+        
+        # 显示对话历史
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+        
+        # 用户输入
+        if prompt := st.chat_input("输入你的问题..."):
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            
+            with st.chat_message("assistant"):
+                with st.spinner("正在思考..."):
+                    try:
+                        if query_mode == "单论文":
+                            result = rag_engine.query(
+                                question=prompt,
+                                paper_id=st.session_state.current_paper_id
+                            )
+                            
+                            answer = result["answer"]
+                            context_count = len(result["contexts"])
+                            source_info = f"基于 {context_count} 个相关段落"
+                            
+                            memory_store.add_conversation(
+                                paper_id=st.session_state.current_paper_id,
+                                question=prompt,
+                                answer=answer,
+                                contexts=result["contexts"]
+                            )
                         
-                        answer = result["answer"]
-                        context_count = len(result["contexts"])
-                        source_info = f"基于 {context_count} 个相关段落"
+                        else:
+                            paper_ids = [p["id"] for p in papers]
+                            result = rag_engine.query_cross_paper(
+                                question=prompt,
+                                paper_ids=paper_ids,
+                                top_k_per_paper=3
+                            )
+                            
+                            answer = result["answer"]
+                            context_count = len(result["contexts"])
+                            paper_count = len(set(m["paper_id"] for m in result["metadata"]))
+                            source_info = f"基于 {context_count} 个相关段落，来自 {paper_count} 篇论文"
                         
-                        # 保存对话记录
-                        memory_store.add_conversation(
-                            paper_id=st.session_state.current_paper_id,
-                            question=prompt,
-                            answer=answer,
-                            contexts=result["contexts"]
-                        )
-                    
-                    else:
-                        # 跨论文问答
-                        paper_ids = [p["id"] for p in papers]
-                        result = rag_engine.query_cross_paper(
-                            question=prompt,
-                            paper_ids=paper_ids,
-                            top_k_per_paper=3
-                        )
+                        st.markdown(answer)
+                        st.caption(source_info)
                         
-                        answer = result["answer"]
-                        context_count = len(result["contexts"])
-                        paper_count = len(set(m["paper_id"] for m in result["metadata"]))
-                        source_info = f"基于 {context_count} 个相关段落，来自 {paper_count} 篇论文"
+                        st.session_state.messages.append({"role": "assistant", "content": answer})
                     
-                    # 显示回答
-                    st.markdown(answer)
-                    st.caption(source_info)
-                    
-                    st.session_state.messages.append({"role": "assistant", "content": answer})
-                
-                except Exception as e:
-                    error_msg = f"提问失败：{e}"
-                    st.error(error_msg)
-                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                    except Exception as e:
+                        error_msg = f"提问失败：{e}"
+                        st.error(error_msg)
+                        st.session_state.messages.append({"role": "assistant", "content": error_msg})
+    
+    elif st.session_state.current_view == "viz":
+        # 可视化视图
+        st.title("📊 向量库可视化")
+        
+        papers = memory_store.list_papers()
+        if not papers:
+            st.warning("请先加载论文")
+            return
+        
+        with st.spinner("正在加载向量数据..."):
+            df = get_vector_data(vector_store, memory_store)
+        
+        if df is not None:
+            visualize_vectors(df)
+        else:
+            st.warning("没有向量数据可可视化")
 
 
 if __name__ == "__main__":
