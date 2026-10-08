@@ -69,6 +69,17 @@ def get_cache_pdfs(cache_path: str):
     return pdf_files
 
 
+def load_conversations_for_paper(memory_store, paper_id):
+    """从 SQLite 加载某篇论文的对话历史到 session_state"""
+    conversations = memory_store.get_conversations(paper_id)
+    messages = []
+    for conv in conversations:
+        messages.append({"role": "user", "content": conv["question"]})
+        messages.append({"role": "assistant", "content": conv["answer"]})
+    st.session_state.messages = messages
+    st.session_state.current_paper_id = paper_id
+
+
 def main():
     st.set_page_config(
         page_title="论文阅读助手",
@@ -100,17 +111,14 @@ def main():
                 if st.button("加载", key=f"cache_{pdf['filename']}"):
                     with st.spinner(f"正在加载 {pdf['filename']}..."):
                         try:
-                            # 解析 PDF
                             result = parser.parse(pdf['filepath'])
                             
-                            # 存入数据库
                             paper_id = memory_store.add_paper(
                                 filename=result["filename"],
                                 full_text=result["full_text"],
                                 char_count=result["char_count"]
                             )
                             
-                            # 存入向量库
                             vector_store.add_paper(
                                 paper_id=paper_id,
                                 chunks=result["chunks"]
@@ -119,8 +127,7 @@ def main():
                             st.success(f"已加载：{result['filename']}")
                             st.info(f"页数：{result['page_count']} | 段落：{len(result['chunks'])}")
                             
-                            # 设置当前论文
-                            st.session_state.current_paper_id = paper_id
+                            load_conversations_for_paper(memory_store, paper_id)
                             
                         except Exception as e:
                             st.error(f"加载失败：{e}")
@@ -136,23 +143,19 @@ def main():
         if uploaded_file is not None:
             if st.button("加载上传的论文", type="primary"):
                 with st.spinner("正在解析论文..."):
-                    # 保存临时文件
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
                         tmp_file.write(uploaded_file.getvalue())
                         tmp_path = tmp_file.name
                     
                     try:
-                        # 解析 PDF
                         result = parser.parse(tmp_path)
                         
-                        # 存入数据库
                         paper_id = memory_store.add_paper(
                             filename=result["filename"],
                             full_text=result["full_text"],
                             char_count=result["char_count"]
                         )
                         
-                        # 存入向量库
                         vector_store.add_paper(
                             paper_id=paper_id,
                             chunks=result["chunks"]
@@ -161,13 +164,11 @@ def main():
                         st.success(f"已加载：{result['filename']}")
                         st.info(f"页数：{result['page_count']} | 段落：{len(result['chunks'])}")
                         
-                        # 设置当前论文
-                        st.session_state.current_paper_id = paper_id
+                        load_conversations_for_paper(memory_store, paper_id)
                         
                     except Exception as e:
                         st.error(f"加载失败：{e}")
                     finally:
-                        # 清理临时文件
                         os.unlink(tmp_path)
         
         st.divider()
@@ -179,12 +180,11 @@ def main():
         if not papers:
             st.info("还没有读过任何论文")
         else:
-            # 初始化当前论文
             if "current_paper_id" not in st.session_state:
-                st.session_state.current_paper_id = papers[0]["id"]
+                load_conversations_for_paper(memory_store, papers[0]["id"])
             
             for paper in papers:
-                is_current = paper["id"] == st.session_state.current_paper_id
+                is_current = paper["id"] == st.session_state.get("current_paper_id")
                 button_type = "primary" if is_current else "secondary"
                 
                 if st.button(
@@ -193,8 +193,7 @@ def main():
                     type=button_type,
                     use_container_width=True
                 ):
-                    st.session_state.current_paper_id = paper["id"]
-                    st.session_state.messages = []  # 清空对话历史
+                    load_conversations_for_paper(memory_store, paper["id"])
                     st.rerun()
         
         st.divider()
@@ -208,7 +207,6 @@ def main():
     # 主界面：问答
     st.title("💬 论文问答")
     
-    # 检查是否有当前论文
     if "current_paper_id" not in st.session_state or not papers:
         st.warning("请先从缓存目录加载或上传一篇论文")
         return
@@ -216,7 +214,6 @@ def main():
     current_paper = memory_store.get_paper(st.session_state.current_paper_id)
     st.caption(f"当前论文：{current_paper['filename']}")
     
-    # 初始化对话历史
     if "messages" not in st.session_state:
         st.session_state.messages = []
     
@@ -227,12 +224,10 @@ def main():
     
     # 用户输入
     if prompt := st.chat_input("输入你的问题..."):
-        # 显示用户消息
         with st.chat_message("user"):
             st.markdown(prompt)
         st.session_state.messages.append({"role": "user", "content": prompt})
         
-        # 生成回答
         with st.chat_message("assistant"):
             with st.spinner("正在思考..."):
                 try:
@@ -244,11 +239,9 @@ def main():
                     answer = result["answer"]
                     context_count = len(result["contexts"])
                     
-                    # 显示回答
                     st.markdown(answer)
                     st.caption(f"基于 {context_count} 个相关段落")
                     
-                    # 保存对话记录
                     memory_store.add_conversation(
                         paper_id=st.session_state.current_paper_id,
                         question=prompt,
