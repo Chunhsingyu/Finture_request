@@ -17,7 +17,7 @@ class MemoryStore:
         """
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path)
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.execute("PRAGMA foreign_keys = ON")
         self._create_tables()
     
@@ -47,15 +47,9 @@ class MemoryStore:
             )
         ''')
         
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_papers_filename ON papers(filename)
-        ''')
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_conversations_paper_id ON conversations(paper_id)
-        ''')
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_conversations_timestamp ON conversations(timestamp)
-        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_papers_filename ON papers(filename)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_conversations_paper_id ON conversations(paper_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_conversations_timestamp ON conversations(timestamp)')
         
         self.conn.commit()
     
@@ -68,11 +62,11 @@ class MemoryStore:
             char_count: 字符数
         
         Returns:
-            paper_id
+            paper_id: 论文ID
         """
         cursor = self.conn.cursor()
         cursor.execute(
-            "INSERT INTO papers (filename, full_text, char_count) VALUES (?, ?, ?)",
+            'INSERT INTO papers (filename, full_text, char_count) VALUES (?, ?, ?)',
             (filename, full_text, char_count)
         )
         self.conn.commit()
@@ -82,24 +76,23 @@ class MemoryStore:
         """获取论文信息
         
         Args:
-            paper_id: 论文 ID
+            paper_id: 论文ID
         
         Returns:
-            论文信息字典，不存在返回 None
+            论文信息字典，不存在返回None
         """
         cursor = self.conn.cursor()
         cursor.execute(
-            "SELECT id, filename, full_text, char_count, added_at FROM papers WHERE id = ?",
+            'SELECT id, filename, char_count, added_at FROM papers WHERE id = ?',
             (paper_id,)
         )
         row = cursor.fetchone()
         if row:
             return {
-                "id": row[0],
-                "filename": row[1],
-                "full_text": row[2],
-                "char_count": row[3],
-                "added_at": row[4]
+                'id': row[0],
+                'filename': row[1],
+                'char_count': row[2],
+                'added_at': row[3]
             }
         return None
     
@@ -114,16 +107,16 @@ class MemoryStore:
         """
         cursor = self.conn.cursor()
         cursor.execute(
-            "SELECT id, filename, char_count, added_at FROM papers ORDER BY added_at DESC LIMIT ?",
+            'SELECT id, filename, char_count, added_at FROM papers ORDER BY added_at DESC LIMIT ?',
             (limit,)
         )
         rows = cursor.fetchall()
         return [
             {
-                "id": row[0],
-                "filename": row[1],
-                "char_count": row[2],
-                "added_at": row[3]
+                'id': row[0],
+                'filename': row[1],
+                'char_count': row[2],
+                'added_at': row[3]
             }
             for row in rows
         ]
@@ -132,17 +125,17 @@ class MemoryStore:
         """删除论文及其对话记录
         
         Args:
-            paper_id: 论文 ID
+            paper_id: 论文ID
         """
         cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM papers WHERE id = ?", (paper_id,))
+        cursor.execute('DELETE FROM papers WHERE id = ?', (paper_id,))
         self.conn.commit()
     
     def add_conversation(self, paper_id: int, question: str, answer: str, contexts: List[str]):
         """添加对话记录
         
         Args:
-            paper_id: 论文 ID
+            paper_id: 论文ID
             question: 问题
             answer: 回答
             contexts: 检索到的上下文段落
@@ -150,7 +143,7 @@ class MemoryStore:
         cursor = self.conn.cursor()
         contexts_json = json.dumps(contexts, ensure_ascii=False)
         cursor.execute(
-            "INSERT INTO conversations (paper_id, question, answer, contexts) VALUES (?, ?, ?, ?)",
+            'INSERT INTO conversations (paper_id, question, answer, contexts) VALUES (?, ?, ?, ?)',
             (paper_id, question, answer, contexts_json)
         )
         self.conn.commit()
@@ -159,24 +152,24 @@ class MemoryStore:
         """获取论文的对话历史
         
         Args:
-            paper_id: 论文 ID
+            paper_id: 论文ID
         
         Returns:
             对话列表
         """
         cursor = self.conn.cursor()
         cursor.execute(
-            "SELECT id, question, answer, contexts, timestamp FROM conversations WHERE paper_id = ? ORDER BY timestamp",
+            'SELECT id, question, answer, contexts, timestamp FROM conversations WHERE paper_id = ? ORDER BY timestamp',
             (paper_id,)
         )
         rows = cursor.fetchall()
         return [
             {
-                "id": row[0],
-                "question": row[1],
-                "answer": row[2],
-                "contexts": json.loads(row[3]) if row[3] else [],
-                "timestamp": row[4]
+                'id': row[0],
+                'question': row[1],
+                'answer': row[2],
+                'contexts': json.loads(row[3]) if row[3] else [],
+                'timestamp': row[4]
             }
             for row in rows
         ]
@@ -191,24 +184,24 @@ class MemoryStore:
             匹配的对话列表
         """
         cursor = self.conn.cursor()
-        like_pattern = f"%{keyword}%"
+        like_pattern = f'%{keyword}%'
         cursor.execute(
-            """SELECT c.id, c.paper_id, p.filename, c.question, c.answer, c.timestamp 
+            '''SELECT c.id, c.paper_id, p.filename, c.question, c.answer, c.timestamp 
                FROM conversations c 
                JOIN papers p ON c.paper_id = p.id 
                WHERE c.question LIKE ? OR c.answer LIKE ? 
-               ORDER BY c.timestamp DESC""",
+               ORDER BY c.timestamp DESC''',
             (like_pattern, like_pattern)
         )
         rows = cursor.fetchall()
         return [
             {
-                "id": row[0],
-                "paper_id": row[1],
-                "filename": row[2],
-                "question": row[3],
-                "answer": row[4],
-                "timestamp": row[5]
+                'id': row[0],
+                'paper_id': row[1],
+                'filename': row[2],
+                'question': row[3],
+                'answer': row[4],
+                'timestamp': row[5]
             }
             for row in rows
         ]
