@@ -47,7 +47,26 @@ def init_modules():
         top_k=config.get_top_k()
     )
     
-    return parser, vector_store, memory_store, rag_engine
+    return parser, vector_store, memory_store, rag_engine, config
+
+
+def get_cache_pdfs(cache_path: str):
+    """获取缓存目录下的 PDF 文件列表"""
+    if not os.path.exists(cache_path):
+        return []
+    
+    pdf_files = []
+    for filename in sorted(os.listdir(cache_path)):
+        if filename.lower().endswith('.pdf'):
+            filepath = os.path.join(cache_path, filename)
+            size_mb = os.path.getsize(filepath) / (1024 * 1024)
+            pdf_files.append({
+                'filename': filename,
+                'filepath': filepath,
+                'size_mb': size_mb
+            })
+    
+    return pdf_files
 
 
 def main():
@@ -58,18 +77,64 @@ def main():
     )
     
     # 初始化模块
-    parser, vector_store, memory_store, rag_engine = init_modules()
+    parser, vector_store, memory_store, rag_engine, config = init_modules()
     
     # 侧边栏：论文管理
     with st.sidebar:
         st.title("📚 论文管理")
         
+        # 从缓存目录加载
+        st.subheader("缓存目录")
+        cache_path = config.get_paper_cache_path()
+        cache_pdfs = get_cache_pdfs(cache_path)
+        
+        if cache_pdfs:
+            st.caption(f"路径：{os.path.abspath(cache_path)}")
+            for pdf in cache_pdfs:
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.text(f"{pdf['filename']}")
+                with col2:
+                    st.caption(f"{pdf['size_mb']:.1f}MB")
+                
+                if st.button("加载", key=f"cache_{pdf['filename']}"):
+                    with st.spinner(f"正在加载 {pdf['filename']}..."):
+                        try:
+                            # 解析 PDF
+                            result = parser.parse(pdf['filepath'])
+                            
+                            # 存入数据库
+                            paper_id = memory_store.add_paper(
+                                filename=result["filename"],
+                                full_text=result["full_text"],
+                                char_count=result["char_count"]
+                            )
+                            
+                            # 存入向量库
+                            vector_store.add_paper(
+                                paper_id=paper_id,
+                                chunks=result["chunks"]
+                            )
+                            
+                            st.success(f"已加载：{result['filename']}")
+                            st.info(f"页数：{result['page_count']} | 段落：{len(result['chunks'])}")
+                            
+                            # 设置当前论文
+                            st.session_state.current_paper_id = paper_id
+                            
+                        except Exception as e:
+                            st.error(f"加载失败：{e}")
+        else:
+            st.info("缓存目录为空")
+        
+        st.divider()
+        
         # 上传论文
         st.subheader("上传论文")
-        uploaded_file = st.file_uploader("选择 PDF 文件", type=["pdf"])
+        uploaded_file = st.file_uploader("选择 PDF 文件", type=["pdf"], label_visibility="collapsed")
         
         if uploaded_file is not None:
-            if st.button("加载论文", type="primary"):
+            if st.button("加载上传的论文", type="primary"):
                 with st.spinner("正在解析论文..."):
                     # 保存临时文件
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
@@ -107,7 +172,7 @@ def main():
         
         st.divider()
         
-        # 论文列表
+        # 已读论文列表
         st.subheader("已读论文")
         papers = memory_store.list_papers()
         
@@ -145,7 +210,7 @@ def main():
     
     # 检查是否有当前论文
     if "current_paper_id" not in st.session_state or not papers:
-        st.warning("请先上传或选择一篇论文")
+        st.warning("请先从缓存目录加载或上传一篇论文")
         return
     
     current_paper = memory_store.get_paper(st.session_state.current_paper_id)
