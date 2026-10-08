@@ -394,6 +394,7 @@ def main():
                         
                         else:
                             paper_ids = [p["id"] for p in papers]
+                            st.info(f"正在从 {len(paper_ids)} 篇论文中检索...")
                             result = rag_engine.query_cross_paper(
                                 question=prompt,
                                 paper_ids=paper_ids,

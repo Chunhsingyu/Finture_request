@@ -25,6 +25,20 @@ class LLMClient:
             base_url=base_url
         )
     
+    def _extract_text(self, response) -> str:
+        """从响应中提取文本，兼容 ThinkingBlock"""
+        text_parts = []
+        for block in response.content:
+            if hasattr(block, 'text') and block.text:
+                text_parts.append(block.text)
+        
+        if text_parts:
+            return "\n".join(text_parts)
+        
+        # 如果找不到文本，返回调试信息
+        block_types = [type(b).__name__ for b in response.content]
+        return f"[调试] 未找到文本块，响应类型: {block_types}"
+    
     def generate_answer(self, question: str, contexts: List[str]) -> str:
         """基于上下文生成答案（单论文）
         
@@ -55,12 +69,7 @@ class LLMClient:
                 }]
             )
             
-            # 兼容 ThinkingBlock
-            for block in response.content:
-                if hasattr(block, 'text'):
-                    return block.text
-            
-            return "无法生成回答"
+            return self._extract_text(response)
             
         except Exception as e:
             return f"API 调用失败：{str(e)}"
@@ -76,6 +85,9 @@ class LLMClient:
         Returns:
             生成的答案
         """
+        if not contexts:
+            return "未找到相关段落，无法回答该问题。"
+        
         # 按论文 ID 分组段落
         paper_contexts = {}
         for ctx, meta in zip(contexts, metadata):
@@ -84,12 +96,15 @@ class LLMClient:
                 paper_contexts[paper_id] = []
             paper_contexts[paper_id].append(ctx)
         
-        # 构建多论文上下文
+        # 构建多论文上下文，限制每篇论文的段落数量
         context_parts = []
         for paper_id, paragraphs in paper_contexts.items():
             context_parts.append(f"\n\n===== 论文 {paper_id} =====\n")
-            for i, para in enumerate(paragraphs, 1):
-                context_parts.append(f"[论文{paper_id} 段落{i}]\n{para}")
+            # 每篇论文最多取 3 个段落
+            for i, para in enumerate(paragraphs[:3], 1):
+                # 限制段落长度
+                para_text = para[:1000] if len(para) > 1000 else para
+                context_parts.append(f"[论文{paper_id} 段落{i}]\n{para_text}")
         
         context_text = "\n\n".join(context_parts)
         
@@ -104,19 +119,14 @@ class LLMClient:
         try:
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=2000,
+                max_tokens=4000,  # 增加 max_tokens
                 messages=[{
                     "role": "user",
                     "content": prompt
                 }]
             )
             
-            # 兼容 ThinkingBlock
-            for block in response.content:
-                if hasattr(block, 'text'):
-                    return block.text
-            
-            return "无法生成回答"
+            return self._extract_text(response)
             
         except Exception as e:
             return f"API 调用失败：{str(e)}"
